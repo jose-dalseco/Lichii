@@ -31,6 +31,10 @@ struct GpuThreadPinning {
     std::vector<u32> front;
     std::vector<u32> back;
     std::vector<u32> guest;
+    /// Every logical processor outside the front and back cores, slower classes included. Shader
+    /// builders and other background workers go here so they never take an SMT sibling of the
+    /// two GPU threads, which bound the frame rate on CPUs with few cores.
+    std::vector<u32> background;
 };
 
 /// The split GPU thread's front and back each get a whole physical performance core, so no SMT

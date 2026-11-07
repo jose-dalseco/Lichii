@@ -18,6 +18,7 @@
 #include "common/error.h"
 #include "common/event_wait.h"
 #include "common/logging.h"
+#include "common/settings.h"
 #include "common/assert.h"
 #include "common/thread.h"
 #ifdef __APPLE__
@@ -694,13 +695,16 @@ void SetCurrentThreadToPerformanceCores() {
 #endif
 }
 
-void PinCurrentThread(PinnedRole role) {
+namespace {
 #ifdef _WIN32
-    struct PinnedCpuSets {
-        std::vector<ULONG> front;
-        std::vector<ULONG> back;
-        std::vector<ULONG> guest;
-    };
+struct PinnedCpuSets {
+    std::vector<ULONG> front;
+    std::vector<ULONG> back;
+    std::vector<ULONG> guest;
+    std::vector<ULONG> background;
+};
+
+const PinnedCpuSets& Pinned() {
     static const PinnedCpuSets pinned = [] {
         const GpuThreadPinning plan = PlanGpuThreadPinning(CpuSets().processors);
         if (plan.front.empty()) {
@@ -711,19 +715,18 @@ void PinCurrentThread(PinnedRole role) {
         }
         LOG_INFO(Common,
                  "GPU thread pinning: front and back on a physical core each, guest cores on the "
-                 "other {} performance cores ({} logical processors)",
-                 plan.performance_cores - 2, plan.guest.size());
+                 "other {} performance cores ({} logical processors), background work on {} "
+                 "logical processors",
+                 plan.performance_cores - 2, plan.guest.size(), plan.background.size());
         return PinnedCpuSets{{plan.front.begin(), plan.front.end()},
                              {plan.back.begin(), plan.back.end()},
-                             {plan.guest.begin(), plan.guest.end()}};
+                             {plan.guest.begin(), plan.guest.end()},
+                             {plan.background.begin(), plan.background.end()}};
     }();
-    const std::vector<ULONG>& ids = role == PinnedRole::GpuFront  ? pinned.front
-                                    : role == PinnedRole::GpuBack ? pinned.back
-                                                                  : pinned.guest;
-    if (!ids.empty()) {
-        SelectCurrentThreadCpuSets(ids);
-    }
+    return pinned;
+}
 #elif defined(__linux__) && !defined(__ANDROID__)
+const GpuThreadPinning& Pinned() {
     static const GpuThreadPinning plan = [] {
         GpuThreadPinning result = PlanGpuThreadPinning(LinuxProcessors());
         if (result.front.empty()) {
@@ -733,16 +736,49 @@ void PinCurrentThread(PinnedRole role) {
         } else {
             LOG_INFO(Common,
                      "GPU thread pinning: front and back on a physical core each, guest cores on "
-                     "the other {} performance cores ({} logical processors)",
-                     result.performance_cores - 2, result.guest.size());
+                     "the other {} performance cores ({} logical processors), background work on "
+                     "{} logical processors",
+                     result.performance_cores - 2, result.guest.size(), result.background.size());
         }
         return result;
     }();
-    const std::vector<u32>& cpus = role == PinnedRole::GpuFront  ? plan.front
-                                   : role == PinnedRole::GpuBack ? plan.back
-                                                                 : plan.guest;
-    if (!cpus.empty()) {
-        SetCurrentThreadAffinity(cpus);
+    return plan;
+}
+#endif
+
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+/// With pin_gpu_threads, background workers keep off the GPU front and back cores. Returns false
+/// when pinning is off or the host has too few cores, leaving the caller's own placement.
+bool PinCurrentThreadToBackgroundCores() {
+    if (!Settings::values.pin_gpu_threads.GetValue()) {
+        return false;
+    }
+    const auto& ids = Pinned().background;
+    if (ids.empty()) {
+        return false;
+    }
+#ifdef _WIN32
+    SelectCurrentThreadCpuSets(ids);
+#else
+    SetCurrentThreadAffinity(ids);
+#endif
+    return true;
+}
+#endif
+} // Anonymous namespace
+
+void PinCurrentThread(PinnedRole role) {
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+    const auto& pinned = Pinned();
+    const auto& ids = role == PinnedRole::GpuFront  ? pinned.front
+                      : role == PinnedRole::GpuBack ? pinned.back
+                                                    : pinned.guest;
+    if (!ids.empty()) {
+#ifdef _WIN32
+        SelectCurrentThreadCpuSets(ids);
+#else
+        SetCurrentThreadAffinity(ids);
+#endif
     }
 #else
     (void)role;
@@ -772,9 +808,14 @@ void SetCurrentThreadToBackgroundWork() {
     ADPF::AddCurrentThread(ADPF::Session::Background);
     SetCurrentThreadCoreGroup(CoreGroup::Unrestricted);
 #elif defined(_WIN32)
+    if (PinCurrentThreadToBackgroundCores()) {
+        return;
+    }
     if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets({});
     }
+#elif defined(__linux__)
+    PinCurrentThreadToBackgroundCores();
 #endif
 }
 

@@ -289,7 +289,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "timeouts on weaker hardware."));
     INSERT(Settings, pin_gpu_threads, tr("Pin GPU threads to their own cores (experimental)"),
            tr("Pins the emulator's GPU threads to dedicated physical CPU cores and keeps the "
-              "emulated CPU cores off them.\n"
+              "emulated CPU cores and background work (shader building) off them.\n"
               "Can hurt performance on CPUs with few cores. Skipped on CPUs with fewer than 6 "
               "physical performance cores.\n"
               "Windows and Linux only. Takes effect when a game starts."));

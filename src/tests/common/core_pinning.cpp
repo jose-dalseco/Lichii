@@ -57,6 +57,7 @@ void CheckSkipped(const Common::GpuThreadPinning& plan) {
     CHECK(plan.front.empty());
     CHECK(plan.back.empty());
     CHECK(plan.guest.empty());
+    CHECK(plan.background.empty());
 }
 
 // Front and back each own one whole core, and no guest processor is an SMT sibling of either.
@@ -73,6 +74,11 @@ void CheckCoresAreDedicated(const std::vector<LogicalProcessor>& processors,
     for (const u32 id : plan.back) {
         CHECK(CoreOf(processors, id) == back_core);
     }
+    for (const u32 id : plan.background) {
+        CHECK(CoreOf(processors, id) != front_core);
+        CHECK(CoreOf(processors, id) != back_core);
+    }
+    CHECK(plan.front.size() + plan.back.size() + plan.background.size() == processors.size());
     for (const u32 id : plan.guest) {
         CHECK(CoreOf(processors, id) != front_core);
         CHECK(CoreOf(processors, id) != back_core);
@@ -98,6 +104,7 @@ TEST_CASE("Core pinning: 6 cores, 12 threads", "[common][core_pinning]") {
     CHECK(plan.front == Ids(2, 2));
     CHECK(plan.back == Ids(4, 2));
     CHECK(plan.guest == Concat(Ids(0, 2), Ids(6, 6)));
+    CHECK(plan.background == plan.guest);
     CheckCoresAreDedicated(processors, plan);
 }
 
@@ -119,6 +126,7 @@ TEST_CASE("Core pinning: hybrid 8 P-cores with SMT and 16 E-cores", "[common][co
     CHECK(plan.front == Ids(2, 2));
     CHECK(plan.back == Ids(4, 2));
     CHECK(plan.guest == Concat(Ids(0, 2), Ids(6, 10)));
+    CHECK(plan.background == Concat(plan.guest, Ids(16, 16)));
     CheckCoresAreDedicated(processors, plan);
 }
 
@@ -174,4 +182,5 @@ TEST_CASE("Core pinning: the enumeration order does not change the cores",
     CHECK(Sorted(plan.front) == expected.front);
     CHECK(Sorted(plan.back) == expected.back);
     CHECK(Sorted(plan.guest) == expected.guest);
+    CHECK(Sorted(plan.background) == expected.background);
 }
